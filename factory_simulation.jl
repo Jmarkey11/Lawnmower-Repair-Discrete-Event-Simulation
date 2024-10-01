@@ -120,16 +120,23 @@ end
 
 function update!(S::State, R::RandomNGs, E::Arrival)
     S.time = E.time
-    new_entity = Entity() # Creating new lawnmower entity
+    new_entity = Entity()  # Creating new lawnmower entity
     new_entity.id = S.arrival_n
     new_entity.arrival_time = E.time
-    enqueue!(S.waiting_queue, new_entity) # adding lawnmower entity to waiting queue
+
+    if S.machine_status == 1 # If the machine is broken, mark the new entity as interrupted
+        new_entity.interrupted = 1
+        S.num_interrupted += 1
+    end
+
+    enqueue!(S.waiting_queue, new_entity)  # adding lawnmower entity to waiting queue
     S.arrival_n += 1
     S.n_events += 1
-    next_arrival_time = E.time + R.interarrival_time() # determining next arrival time
+    next_arrival_time = E.time + R.interarrival_time()  # determining next arrival time
     arrival_event = Arrival(S.arrival_n, next_arrival_time)  # creating next arrival event
-    enqueue!(S.event_queue, arrival_event, next_arrival_time) # adding arrival event to event queue
-    if S.machine_status == 0 && S.in_service === nothing # move_into_service only if machine is operational and no lawnomwer entity is in service
+    enqueue!(S.event_queue, arrival_event, next_arrival_time)  # adding arrival event to event queue
+
+    if S.machine_status == 0 && S.in_service === nothing # Move into service if machine is operational and no lawnmower entity is in service
         move_into_service(S, R)
     end
 end
@@ -147,30 +154,36 @@ end
 
 function update!(S::State, R::RandomNGs, E::Breakdown)
     S.time = E.time
-    S.machine_status = 1 # changing status to broken
-    repair_duration = R.repair_time() # getting repair duration
+    S.machine_status = 1  # changing status to broken
+    repair_duration = R.repair_time()  # getting repair duration
     S.total_downtime += repair_duration 
-    S.n_events +=1
+    S.n_events += 1
 
-    if S.in_service !== nothing # If a lawnmower was in service with machine
+    if S.in_service !== nothing # If a lawnmower was in service during the breakdown
         S.num_interrupted += 1
-        S.in_service.completion_time += repair_duration # delaying completion time by repair duration
+        S.in_service.completion_time += repair_duration  # delay completion time by repair duration
         S.in_service.interrupted = 1
-        for (event, _) in S.event_queue # searching for departure event in event queue
-            if isa(event, Departure)                
-                other_events = [(ev, time) for (ev, time) in S.event_queue if ev !== event] # getting all other events in event queue that need requeueing
-                clear!(S.event_queue) # clearing event queue
+        for (event, _) in S.event_queue # Adjusting the departure event in the event queue
+            if isa(event, Departure)
+                other_events = [(ev, time) for (ev, time) in S.event_queue if ev !== event]  # get all other events
+                S.event_queue = PriorityQueue{Event, Float64}()  # clear and reinitialize the event queue
                 for (ev, time) in other_events
-                    enqueue!(S.event_queue, ev, time) # remaking event queue with other events 
+                    enqueue!(S.event_queue, ev, time)  # re-enqueue other events
                 end
-                enqueue!(S.event_queue, Departure(event.id, S.in_service.completion_time), S.in_service.completion_time) # enqueueing departure event into new queue with delayed departure time
+                enqueue!(S.event_queue, Departure(event.id, S.in_service.completion_time), S.in_service.completion_time)  # enqueue the delayed departure
                 break
             end
         end
     end
 
-    repair_event = RepairCompletion(S.breakdown_n, S.time + repair_duration) # creating repair completion event
-    enqueue!(S.event_queue, repair_event, S.time + repair_duration) # adding repair completion event to event queue
+    num_waiting = length(S.waiting_queue) # Mark all entities in the waiting queue as interrupted and update the count
+    for entity in S.waiting_queue
+        entity.interrupted = 1
+    end
+    S.num_interrupted += num_waiting
+    
+    repair_event = RepairCompletion(S.breakdown_n, S.time + repair_duration)  # creating repair completion event
+    enqueue!(S.event_queue, repair_event, S.time + repair_duration)  # adding repair completion event to event queue
     S.breakdown_n += 1
 end
 
